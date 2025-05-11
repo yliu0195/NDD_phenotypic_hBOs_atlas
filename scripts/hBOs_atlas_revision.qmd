@@ -1,0 +1,188 @@
+---
+title: "hBOs_atlas_revision"
+format: html
+editor: visual
+---
+
+##package loading
+
+```{r}
+library(Seurat)
+#library(speckle)
+library(limma)
+library(ggplot2)
+library(edgeR)
+library(patchwork)
+library(cowplot)
+library(gridGraphics)
+library(gridExtra)   
+library(dplyr)
+```
+
+##Object loading
+
+```{r}
+NDD_C_E <- readRDS(file = "/Users/yangliu/Desktop/Wang lab/NDD/Monocle/NDD_C_E.rds/NDD_C_E.rds")
+
+# Step 2: Normalize and scale
+NDD_C_E <- NormalizeData(NDD_C_E)
+NDD_C_E <- FindVariableFeatures(NDD_C_E)
+NDD_C_E <- ScaleData(NDD_C_E)
+
+# Step 3: Run PCA and find clusters
+NDD_C_E <- RunPCA(NDD_C_E, features = VariableFeatures(NDD_C_E))
+NDD_C_E <- FindNeighbors(NDD_C_E, dims = 1:10)
+NDD_C_E <- FindClusters(NDD_C_E, resolution = 0.5)
+
+#QC check
+NDD_C_E@meta.data
+VlnPlot(NDD_C_E, features = "nFeature_RNA")
+VlnPlot(NDD_C_E, features = "percent.mt")
+VlnPlot(NDD_C_E, features = "nCount_RNA")
+
+#check clusters
+#seurat cluster
+DimPlot(NDD_C_E, group.by = "seurat_clusters")
+#annotated_class
+DimPlot(NDD_C_E, group.by = "annotated_class")
+
+
+# Extract the metadata and filter for specific type of neurons
+mixed_neuron_rows <- neurons@meta.data %>%
+  filter(annotated_subclass == "Mixed neurons")
+vGlut_2_neuron_rows <- neurons@meta.data %>%
+  filter(annotated_subclass == "vGlut-2 neurons")
+unique(vGlut_2_neuron_rows$seurat_clusters)
+
+```
+
+#Ctrl bar + box plot
+
+```{r}
+df <- read.csv("/Users/yangliu/Downloads/boxplot-figs1.csv")
+
+# Reshape to long format
+df_long <- df %>%
+  pivot_longer(-sample, names_to = "Protein", values_to = "Proportion")
+
+# Set sample order
+df_long$sample <- factor(df_long$sample, levels = paste0("Ctrl", 1:10))
+
+unique(df_long$Protein)
+# Define matching colors
+custom_colors <- c(
+  "SOX2..DIV28" = "#a61005",
+  "KI67..DIV28" = "#069108",
+  "CC3..DIV28" = "#054dab",
+  "SOX2..DIV52" = "#d62728",
+  "KI67..DIV52" = "#07eb0b",
+  "CC3..DIV52" = "#0c6ff0",
+  "TBR2..DIV52" = "#ffbb78",
+  "CTIP2..DIV52" = "#9467bd"
+)
+
+
+# Plot: stacked bar by sample
+ggplot(df_long, aes(x = sample, y = Proportion, fill = Protein)) +
+  geom_bar(stat = "identity", position = "fill") +  # normalize to proportions
+  scale_fill_manual(values = custom_colors) +
+  labs(title = "Protein Proportions Across Samples", y = "Proportion", x = "Sample") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("protein_quantification_plot.pdf", width = 10, height = 6)
+
+
+
+```
+
+```{r}
+df <- read.csv("/Users/yangliu/Downloads/boxplot-figs2.csv")
+
+
+# Make column names unique for pivoting
+colnames(df)[-1] <- make.unique(colnames(df)[-1])
+
+# Pivot longer
+df_long <- df %>%
+  pivot_longer(
+    cols = -Samples,
+    names_to = "Marker_Rep",
+    values_to = "Percentage"
+  )
+
+# Extract full protein name (e.g., "SOX2%-DIV28") before the replicate suffix
+df_long <- df_long %>%
+  mutate(
+    Protein = str_extract(Marker_Rep, "^.+..DIV\\d+")
+  )
+
+# Define custom colors
+custom_colors <- c(
+  "SOX2..DIV28" = "#a61005",
+  "KI67..DIV28" = "#069108",
+  "CC3..DIV28" = "#054dab",
+  "SOX2..DIV52" = "#d62728",
+  "KI67..DIV52" = "#07eb0b",
+  "CC3..DIV52" = "#0c6ff0",
+  "TBR2..DIV52" = "#ffbb78",
+  "CTIP2..DIV52" = "#9467bd"
+)
+
+# Final boxplot
+ggplot(df_long, aes(x = Protein, y = Percentage, fill = Protein)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  geom_jitter(width = 0.2, size = 0.8, alpha = 0.4, color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "black") +
+  scale_fill_manual(values = custom_colors) +
+  labs(title = "Protein Expression Across Samples", x = "Protein", y = "Percentage") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("protein_expression_variability_across_sample_plot.pdf", width = 10, height = 6)
+
+```
+
+```{r}
+# Compute sample-level means
+sample_means <- df_long %>%
+  group_by(Protein, Samples) %>%
+  summarise(SampleMean = mean(Percentage), .groups = "drop")
+
+# Final plot
+ggplot(df_long, aes(x = Protein, y = Percentage, fill = Protein)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  geom_jitter(width = 0.2, size = 0.8, alpha = 0.6, color = "grey") +
+  geom_point(data = sample_means, aes(x = Protein, y = SampleMean), 
+             size = 1.0, shape = 21, fill = "black", color = "black") +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3.5, fill = "white") +
+  scale_fill_manual(values = custom_colors) +
+  labs(title = "Protein Expression Across Samples", x = "Protein", y = "Percentage") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+ggsave("protein_expression_variability_across_sample_plot.pdf", width = 10, height = 6)
+
+```
+
+```{r}
+# Ensure sample order is correct
+df_long$Samples <- factor(df_long$Samples, levels = paste0("Ctrl", 1:10))
+sample_means$Samples <- factor(sample_means$Samples, levels = paste0("Ctrl", 1:10))
+
+ggplot(df_long, aes(x = Protein, y = Percentage, fill = Protein)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6) +
+  geom_jitter(width = 0.2, size = 0.5, alpha = 0.6, color = "grey") +
+  geom_point(data = sample_means, 
+             aes(x = Protein, y = SampleMean, color = Samples), 
+             size = 0.8, shape = 21, stroke = 1.2, fill = "black") +  # Removed fill
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3.5, fill = "white") +
+  scale_fill_manual(values = custom_colors) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(n = 10, name = "Paired")) +
+  labs(title = "Protein Expression Across Samples",
+       x = "Protein", y = "Percentage", color = "Samples") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title.align = 0.5)
+
+ggsave("protein_expression_variability_across_sample_plot.pdf", width = 10, height = 8)
+
+```
